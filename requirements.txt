@@ -1,4 +1,2 @@
 fastapi
-uvicorn
-pandas
-scikit-learn
+uvicorn[standard]

@@ -59,15 +59,16 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
     recommendations = []
     for _, row in page_df.iterrows():
         recommendations.append(Recommendation(
-            food_id=row["menu_id"],
+            food_id=str(row["menu_id"]),        # str9row → str(row…)
             food_name=row["menu_name"],
             restaurant_name=row["restaurant_name"],
             price=int(row["price"]),
             distance=round(float(row["distance"]), 2),
-            container_fit=row["container_fit"],
+            container_fit=float(row["container_fit"]),
             image_url=str(row.get("image_url") or ""),
             description=str(row.get("notes") or "")
         ))
+
 
     return RecommendResponse(
         page=req.page,
