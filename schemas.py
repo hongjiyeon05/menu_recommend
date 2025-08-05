@@ -1,0 +1,34 @@
+from pydantic import BaseModel, Field, conint
+from typing import List, Optional
+
+
+class Container(BaseModel):
+    width: conint(gt=0) = Field(..., example=20, description="용기 가로 길이 (cm)")
+    length: conint(gt=0) = Field(..., example=15, description="용기 세로 길이 (cm)")
+    height: conint(gt=0) = Field(..., example=10, description="용기 높이 (cm)")
+
+class RecommendRequest(BaseModel):
+    container: Container = Field(..., description="사용자의 용기 사이즈 정보")
+    categories: List[str] = Field(..., example=["한식", "양식"], description="선택된 음식 카테고리 리스트")
+    sort: Optional[str] = Field("default", example="price_asc", description="정렬 기준 (default, distance, price_asc, price_desc)")
+    page: Optional[int] = Field(1, example=1, description="페이지 번호 (1부터 시작)")
+    limit: Optional[int] = Field(10, example=5, description="한 페이지당 결과 수")
+
+class Recommendation(BaseModel):
+    food_id: int = Field(..., example=123)
+    food_name: str = Field(..., example="김치볶음밥")
+    restaurant_name: str = Field(..., example="맛있는집")
+    price: int = Field(..., example=8500)
+    distance: float = Field(..., example=1.2)
+    container_fit: float = Field(..., example=0.92, description="용기에 대한 적합도 (0.0 ~ 1.0)")
+    image_url: str = Field(..., example="https://example.com/image.jpg")
+    description: str = Field(..., example="매콤한 김치와 고슬고슬한 밥이 어우러진 볶음밥")
+
+class RecommendResponse(BaseModel):
+    page: int = Field(..., example=1)
+    limit: int = Field(..., example=5)
+    total: int = Field(..., example=134)
+    recommendations: List[Recommendation]
+
+class CategoryList(BaseModel):
+    categories: List[str] = Field(..., example=["한식", "중식", "일식", "양식", "기타"])
