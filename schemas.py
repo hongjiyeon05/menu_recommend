@@ -12,6 +12,7 @@ class RecommendRequest(BaseModel):
     sort: Optional[str]    = Field("default", example="price_asc", description="정렬 기준")
     page: Optional[int]    = Field(1, example=1, description="페이지 번호")
     limit: Optional[int]   = Field(10, example=5, description="한 페이지당 결과 수")
+    use_ai: Optional[bool] = Field(False, description="AI 추천 사용 여부")
 
 class Recommendation(BaseModel):
     food_id: str = Field(..., example="M203")               # ← int → str  
