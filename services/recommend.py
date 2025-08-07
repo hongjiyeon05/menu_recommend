@@ -1,15 +1,32 @@
+# services/recommend.py
+
 import pandas as pd
 from schemas import RecommendRequest, RecommendResponse, Recommendation
+from ai_recommender import AIFoodRecommendationSystem
 
-# 실제 CSV 경로
+# ────────────────────────────────────────────────────────────
+# 1) CSV 로드 및 기본 데이터 준비
+# ────────────────────────────────────────────────────────────
 menus_df = pd.read_csv("data/final_menus_data.csv")
 restaurants_df = pd.read_csv("data/restaurants.csv")
-
-# 거리 정보 없으므로 index 기준 가짜 거리 생성
 restaurants_df["distance"] = restaurants_df.index % 20 * 0.1 + 0.5
 restaurants_df.rename(columns={"name": "restaurant_name"}, inplace=True)
 
-# 적합도 계산 함수
+# ────────────────────────────────────────────────────────────
+# 2) AI 시스템 주입용 변수 & 초기화 함수
+# ────────────────────────────────────────────────────────────
+_ai_system: AIFoodRecommendationSystem = None
+
+def init_ai_system(system: AIFoodRecommendationSystem):
+    """
+    main.py에서 앱 시작 시 호출하여 AI 시스템을 주입합니다.
+    """
+    global _ai_system
+    _ai_system = system
+
+# ────────────────────────────────────────────────────────────
+# 3) 유틸 함수들
+# ────────────────────────────────────────────────────────────
 def calc_fit(w, l, h, cw, cl, ch):
     if w > cw or l > cl or h > ch:
         return 0.0
@@ -19,60 +36,98 @@ def calc_fit(w, l, h, cw, cl, ch):
 def get_all_categories():
     return menus_df["category"].dropna().unique().tolist()
 
+# ────────────────────────────────────────────────────────────
+# 4) 메인 추천 함수 (볼륨 기반 + AI 기반 통합)
+# ────────────────────────────────────────────────────────────
 def get_recommendations(req: RecommendRequest) -> RecommendResponse:
+    # 카테고리 검증
     valid = set(get_all_categories())
     for cat in req.categories:
         if cat not in valid:
             raise KeyError(f"지원하지 않는 카테고리: {cat}")
 
-    # 메뉴 필터링
+    # AI 모드로 호출
+    if getattr(req, "use_ai", False):
+        if _ai_system is None:
+            raise ValueError("AI 시스템이 초기화되지 않았습니다.")
+
+        # 카테고리별 AI 추천을 모아서
+        candidates = []
+        for cat in req.categories:
+            ai_res = _ai_system.get_ai_recommendations(
+                user_width=req.container.width,
+                user_length=req.container.length,
+                user_height=req.container.height,
+                category=cat,
+                top_k=req.limit
+            )
+            if ai_res.get("status") == "success":
+                candidates.extend(ai_res["recommendations"])
+
+        # 점수 순 정렬 후 상위 limit개
+        candidates.sort(key=lambda x: x["final_ai_score"], reverse=True)
+        selected = candidates[:req.limit]
+
+        # Pydantic Recommendation 모델로 변환
+        recs = [
+            Recommendation(
+                food_id=str(item["menu_id"]),
+                food_name=item["menu_name"],
+                restaurant_name=item["restaurant_name"],
+                price=item["price"],
+                distance=0.0,
+                container_fit=round(item["container_utilization"]/100, 2),
+                image_url="",
+                description=f"AI 점수: {item['final_ai_score']}"
+            )
+            for item in selected
+        ]
+        return RecommendResponse(
+            page=1,
+            limit=req.limit,
+            total=len(recs),
+            recommendations=recs
+        )
+
+    # ────────────────────────────────────────────────────────────
+    # 기존 볼륨 기반 로직
+    # ────────────────────────────────────────────────────────────
     filtered = menus_df[menus_df["category"].isin(req.categories)].copy()
-
-    # 적합도 계산
-    c_w, c_l, c_h = req.container.width, req.container.length, req.container.height
+    cw, cl, ch = req.container.width, req.container.length, req.container.height
     filtered["container_fit"] = filtered.apply(
-        lambda row: calc_fit(row["width"], row["length"], row["height"], c_w, c_l, c_h),
-        axis=1
+        lambda r: calc_fit(r["width"], r["length"], r["height"], cw, cl, ch), axis=1
     )
-
-    # 식당 정보 병합
     merged = filtered.merge(restaurants_df, on="restaurant_id", how="left")
 
-    # 정렬
-    sort_key = req.sort
-    if sort_key == "distance":
+    if req.sort == "distance":
         merged.sort_values("distance", inplace=True)
-    elif sort_key == "price_asc":
+    elif req.sort == "price_asc":
         merged.sort_values("price", inplace=True)
-    elif sort_key == "price_desc":
+    elif req.sort == "price_desc":
         merged.sort_values("price", ascending=False, inplace=True)
-    else:  # default or container_fit
+    else:
         merged.sort_values("container_fit", ascending=False, inplace=True)
 
-    # 페이징
     total = len(merged)
     start = (req.page - 1) * req.limit
-    end = start + req.limit
-    page_df = merged.iloc[start:end]
+    page_df = merged.iloc[start : start + req.limit]
 
-    # 응답 객체 생성
-    recommendations = []
-    for _, row in page_df.iterrows():
-        recommendations.append(Recommendation(
-            food_id=str(row["menu_id"]),        # str9row → str(row…)
-            food_name=row["menu_name"],
-            restaurant_name=row["restaurant_name"],
-            price=int(row["price"]),
-            distance=round(float(row["distance"]), 2),
-            container_fit=float(row["container_fit"]),
-            image_url=str(row.get("image_url") or ""),
-            description=str(row.get("notes") or "")
-        ))
-
-
+    recs = [
+        Recommendation(
+            food_id=str(r["menu_id"]),
+            food_name=r["menu_name"],
+            restaurant_name=r["restaurant_name"],
+            price=int(r["price"]),
+            distance=round(float(r["distance"]), 2),
+            container_fit=float(r["container_fit"]),
+            image_url=str(r.get("image_url") or ""),
+            description=str(r.get("notes") or "")
+        )
+        for _, r in page_df.iterrows()
+    ]
     return RecommendResponse(
         page=req.page,
         limit=req.limit,
         total=total,
-        recommendations=recommendations
+        recommendations=recs
     )
