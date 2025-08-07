@@ -1,3 +1,4 @@
+# main.py
 from fastapi import FastAPI
 import pandas as pd
 
@@ -14,4 +15,5 @@ restaurants_df = pd.read_csv("data/restaurants.csv")
 ai_sys = AIFoodRecommendationSystem(menus_df, restaurants_df)
 init_ai_system(ai_sys)
 
+# 라우터 등록
 app.include_router(recommend_router, prefix="/recommend", tags=["recommend"])
