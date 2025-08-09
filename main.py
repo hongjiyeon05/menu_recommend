@@ -1,19 +1,21 @@
-# main.py
+# main.py (권장 리팩토링)
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from pathlib import Path
 import pandas as pd
 
 from routes.recommend import router as recommend_router
-from services.recommend import init_ai_system, AIFoodRecommendationSystem
+from services.recommender import AIFoodRecommendationSystem  # ← 파일명 맞추기
 
-app = FastAPI()
+BASE = Path(__file__).parent
 
-# 데이터 로드
-menus_df       = pd.read_csv("data/final_menus_data.csv")
-restaurants_df = pd.read_csv("data/restaurants.csv")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    menus_df       = pd.read_csv(BASE / "data/final_menus_data.csv")
+    restaurants_df = pd.read_csv(BASE / "data/restaurants.csv")
+    app.state.ai_sys = AIFoodRecommendationSystem(menus_df, restaurants_df)
+    yield
+    # (필요하면 종료 처리)
 
-# AI 시스템 초기화 및 주입
-ai_sys = AIFoodRecommendationSystem(menus_df, restaurants_df)
-init_ai_system(ai_sys)
-
-# 라우터 등록
+app = FastAPI(lifespan=lifespan)
 app.include_router(recommend_router, prefix="/recommend", tags=["recommend"])
