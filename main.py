@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from routes.recommend import router as recommend_router
-from services.recommender import AIFoodRecommendationSystem  # ← 파일명 맞추기
+from services.recommender import init_ai_system, AIFoodRecommendationSystem
 
 BASE = Path(__file__).parent
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from typing import List
 
 from schemas import RecommendRequest, RecommendResponse
-from services.recommend import get_recommendations, get_all_categories
+from services.recommender import get_recommendations, get_all_categories
 
 router = APIRouter()
 
