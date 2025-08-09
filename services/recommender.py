@@ -16,7 +16,6 @@ warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────
 # 기본값 / 키워드 설정 (모두 "문자열"이어야 함. Ellipsis(...) 쓰지 말 것!)
-# 필요에 맞게 수정 가능
 # ─────────────────────────────────────────────────────────────
 DEFAULT_VALUES = {
     "POPULARITY_SCORE": 5.0
@@ -42,6 +41,24 @@ class AIFoodRecommendationSystem:
         self.menus_df = menus_df.copy()
         self.restaurants_df = restaurants_df.copy()
 
+        # 레스토랑 DF 정리: 쓰레기 컬럼 제거 + 컬럼명/타입 통일
+        drop_cols = [c for c in self.restaurants_df.columns if str(c).startswith("Unnamed")]
+        if drop_cols:
+            self.restaurants_df = self.restaurants_df.drop(columns=drop_cols, errors="ignore")
+        # name -> restaurant_name 으로 통일
+        if "name" in self.restaurants_df.columns and "restaurant_name" not in self.restaurants_df.columns:
+            self.restaurants_df = self.restaurants_df.rename(columns={"name": "restaurant_name"})
+        # id 타입 통일(문자 추천)
+        if "restaurant_id" in self.menus_df.columns:
+            self.menus_df["restaurant_id"] = self.menus_df["restaurant_id"].astype(str)
+        if "restaurant_id" in self.restaurants_df.columns:
+            self.restaurants_df["restaurant_id"] = self.restaurants_df["restaurant_id"].astype(str)
+        # 빠른 조회용 맵
+        if {"restaurant_id", "restaurant_name"}.issubset(self.restaurants_df.columns):
+            self._rid2name = dict(zip(self.restaurants_df["restaurant_id"], self.restaurants_df["restaurant_name"]))
+        else:
+            self._rid2name = {}
+
         # 전처리
         self._preprocess_data()
 
@@ -65,9 +82,12 @@ class AIFoodRecommendationSystem:
                 self.menus_df[col] = pd.to_numeric(self.menus_df[col], errors="coerce")
 
         # 결측치 기본값
-        self.menus_df["popularity_score"] = self.menus_df["popularity_score"].fillna(
-            DEFAULT_VALUES["POPULARITY_SCORE"]
-        )
+        if "popularity_score" in self.menus_df.columns:
+            self.menus_df["popularity_score"] = self.menus_df["popularity_score"].fillna(
+                DEFAULT_VALUES["POPULARITY_SCORE"]
+            )
+        else:
+            self.menus_df["popularity_score"] = DEFAULT_VALUES["POPULARITY_SCORE"]
 
         # 부피
         if all(c in self.menus_df.columns for c in ["width", "length", "height"]):
@@ -95,22 +115,15 @@ class AIFoodRecommendationSystem:
     # ─────────────────────────────
     def _classify_food_flexibility(self, name: Any) -> str:
         if pd.isna(name):
-            # 이름이 비어도 보수적으로 'flexible'
             return "flexible"
-
         s = str(name).lower()
 
-        # 고정형 키워드가 먼저 매칭되면 'rigid'
         for kw in RIGID_FOODS:
             if isinstance(kw, str) and kw and kw.lower() in s:
                 return "rigid"
-
-        # 유연형 키워드 매칭
         for kw in FLEXIBLE_FOODS:
             if isinstance(kw, str) and kw and kw.lower() in s:
                 return "flexible"
-
-        # 기본은 flexible
         return "flexible"
 
     # ─────────────────────────────
@@ -121,9 +134,7 @@ class AIFoodRecommendationSystem:
             self.cluster_info = {}
             return
 
-        categories = (
-            self.menus_df["category"].dropna().astype(str).unique().tolist()
-        )
+        categories = self.menus_df["category"].dropna().astype(str).unique().tolist()
         for category in categories:
             cat_df = self.menus_df[self.menus_df["category"].astype(str) == category].copy()
 
@@ -197,13 +208,11 @@ class AIFoodRecommendationSystem:
 
         if uv <= 0 or mv <= 0:
             return 0.0
-
         if mv > uv:
             return 0.0
 
         if str(flex).lower() == "flexible":
             return float(min(100.0, (mv / uv) * 110.0))  # capped 100
-        # rigid일 때 한 변이라도 큰 경우 0
         if mw > uw or ml > ul or mh > uh:
             return 0.0
         return float((mv / uv) * 100.0)
@@ -215,8 +224,7 @@ class AIFoodRecommendationSystem:
         info = self.cluster_info.get(str(category))
         if not info:
             return 50.0
-        clusters = info.get("clusters", {})
-        for cid, data in clusters.items():
+        for cid, data in info.get("clusters", {}).items():
             if idx in data.get("indices", []):
                 avg = float(data.get("avg_popularity", DEFAULT_VALUES["POPULARITY_SCORE"]))
                 size = int(data.get("size", 1))
@@ -257,12 +265,9 @@ class AIFoodRecommendationSystem:
 
             score = util * 0.5 + cs * 0.3 + ps * 0.2
 
-            rname = "정보없음"
-            rid = m.get("restaurant_id", None)
-            if rid is not None and "restaurant_id" in self.restaurants_df.columns:
-                rest = self.restaurants_df[self.restaurants_df["restaurant_id"] == rid]
-                if not rest.empty and "restaurant_name" in rest.columns:
-                    rname = str(rest["restaurant_name"].iloc[0])
+            # 식당 이름 조회(빠른 맵 사용)
+            rid = str(m.get("restaurant_id", ""))
+            rname = self._rid2name.get(rid, "정보없음")
 
             price_val = m.get("price", 0)
             try:
@@ -325,7 +330,7 @@ def get_all_categories() -> List[str]:
 def get_recommendations(req: RecommendRequest) -> RecommendResponse:
     ai = _ensure_ai()
     menus = ai.menus_df
-    rests = ai.restaurants_df
+    rests = ai.restaurants_df  # 참고용(merge 시 최소 컬럼만 사용)
 
     # 카테고리 검증
     valid = set(menus.get("category", pd.Series(dtype=str)).dropna().astype(str).unique())
@@ -374,8 +379,10 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
         axis=1
     )
 
-    # 레스토랑 조인
-    merged = df.merge(rests, on="restaurant_id", how="left", suffixes=("", "_rest"))
+    # 레스토랑 조인: 필요한 컬럼만 깔끔하게
+    rests_min = ai.restaurants_df[["restaurant_id", "restaurant_name"]].copy() if \
+        {"restaurant_id", "restaurant_name"}.issubset(ai.restaurants_df.columns) else ai.restaurants_df
+    merged = df.merge(rests_min, on="restaurant_id", how="left")
 
     # 정렬
     sort_key = str(getattr(req, "sort", "default") or "default")
@@ -384,6 +391,7 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
     elif sort_key == "price_asc" and "price" in merged.columns:
         merged = merged.sort_values("price", ascending=True)
     elif sort_key == "price_desc" and "price" in merged.columns:
+        merged = merged.sort_values("price", descending=True)  # ascending=False와 동일 의도
         merged = merged.sort_values("price", ascending=False)
     else:
         merged = merged.sort_values("container_fit", ascending=False)
@@ -412,9 +420,7 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
             Recommendation(
                 food_id=str(r.get("menu_id", "")),
                 food_name=str(r.get("menu_name", "")),
-                restaurant_name=str(
-                    r.get("restaurant_name", r.get("restaurant_name_rest", "정보없음"))
-                ),
+                restaurant_name=str(r.get("restaurant_name", "정보없음")),
                 price=price_int,
                 distance=distance_f,
                 container_fit=float(r.get("container_fit", 0.0) or 0.0),
