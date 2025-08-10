@@ -1,5 +1,6 @@
 # main.py
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import pandas as pd, os
 from routes.recommend import router as recommend_router
@@ -11,7 +12,6 @@ async def lifespan(app: FastAPI):
     menus_csv = os.path.join(data_dir, "final_menus_data.csv")
     rests_csv = os.path.join(data_dir, "restaurants.csv")
 
-    # 파일 존재 확인 (Render 경로 기준)
     assert os.path.exists(menus_csv), f"NOT FOUND: {menus_csv}"
     assert os.path.exists(rests_csv), f"NOT FOUND: {rests_csv}"
 
@@ -23,10 +23,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# 라우터 연결
+# ✅ 모든 도메인 CORS 허용
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 모든 오리진 허용
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(recommend_router, prefix="/recommend", tags=["recommend"])
 
-# 헬스 체크(루트 404 피하기용)
 @app.get("/health")
 def health():
     return {"ok": True}
