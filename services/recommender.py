@@ -1,6 +1,6 @@
 # services/recommender.py
-
 from __future__ import annotations
+
 import warnings
 from typing import Dict, List, Any, Optional
 
@@ -15,10 +15,10 @@ from schemas import RecommendRequest, RecommendResponse, Recommendation
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────
-# 기본값 / 키워드 설정 (모두 "문자열"이어야 함. Ellipsis(...) 쓰지 말 것!)
+# 기본값 / 키워드
 # ─────────────────────────────────────────────────────────────
 DEFAULT_VALUES = {
-    "POPULARITY_SCORE": 5.0
+    "POPULARITY_SCORE": 5.0  # menus_df.popularity_score 결측 시 대체
 }
 
 FLEXIBLE_FOODS: List[str] = [
@@ -33,7 +33,7 @@ RIGID_FOODS: List[str] = [
 
 
 # ─────────────────────────────────────────────────────────────
-# AI 추천 시스템 본체
+# AI 추천 시스템
 # ─────────────────────────────────────────────────────────────
 class AIFoodRecommendationSystem:
     def __init__(self, menus_df: pd.DataFrame, restaurants_df: pd.DataFrame):
@@ -41,31 +41,38 @@ class AIFoodRecommendationSystem:
         self.menus_df = menus_df.copy()
         self.restaurants_df = restaurants_df.copy()
 
-        # 레스토랑 DF 정리: 쓰레기 컬럼 제거 + 컬럼명/타입 통일
+        # 레스토랑 DF 정리: 쓰레기 컬럼 제거
         drop_cols = [c for c in self.restaurants_df.columns if str(c).startswith("Unnamed")]
         if drop_cols:
             self.restaurants_df = self.restaurants_df.drop(columns=drop_cols, errors="ignore")
-        # name -> restaurant_name 으로 통일
+
+        # 컬럼명 통일: name -> restaurant_name
         if "name" in self.restaurants_df.columns and "restaurant_name" not in self.restaurants_df.columns:
             self.restaurants_df = self.restaurants_df.rename(columns={"name": "restaurant_name"})
-        # id 타입 통일(문자 추천)
+
+        # 타입 통일 (문자열 ID 권장)
         if "restaurant_id" in self.menus_df.columns:
             self.menus_df["restaurant_id"] = self.menus_df["restaurant_id"].astype(str)
         if "restaurant_id" in self.restaurants_df.columns:
             self.restaurants_df["restaurant_id"] = self.restaurants_df["restaurant_id"].astype(str)
-        # 빠른 조회용 맵
+
+        # 빠른 조회용 맵: restaurant_id -> name / place_id
         if {"restaurant_id", "restaurant_name"}.issubset(self.restaurants_df.columns):
             self._rid2name = dict(zip(self.restaurants_df["restaurant_id"], self.restaurants_df["restaurant_name"]))
         else:
             self._rid2name = {}
 
+        if "place_id" in self.restaurants_df.columns and "restaurant_id" in self.restaurants_df.columns:
+            self.restaurants_df["place_id"] = self.restaurants_df["place_id"].astype(str)
+            self._rid2place = dict(zip(self.restaurants_df["restaurant_id"], self.restaurants_df["place_id"]))
+        else:
+            self._rid2place = {}
+
         # 전처리
         self._preprocess_data()
 
-        # ML 파이프라인 (카테고리별로 매번 fit하지만, 객체 재사용해도 무방)
-        self.tfidf_vectorizer = TfidfVectorizer(
-            max_features=30, ngram_range=(1, 2), analyzer="char"
-        )
+        # ML 파이프라인
+        self.tfidf_vectorizer = TfidfVectorizer(max_features=30, ngram_range=(1, 2), analyzer="char")
         self.scaler = StandardScaler()
         self.cluster_info: Dict[str, Dict[str, Any]] = {}
 
@@ -73,7 +80,7 @@ class AIFoodRecommendationSystem:
         self._build_ai_features()
 
     # ─────────────────────────────
-    # 내부: 전처리
+    # 전처리
     # ─────────────────────────────
     def _preprocess_data(self) -> None:
         # 숫자 컬럼 안전 변환
@@ -81,7 +88,7 @@ class AIFoodRecommendationSystem:
             if col in self.menus_df.columns:
                 self.menus_df[col] = pd.to_numeric(self.menus_df[col], errors="coerce")
 
-        # 결측치 기본값
+        # 인기점수 결측 보정
         if "popularity_score" in self.menus_df.columns:
             self.menus_df["popularity_score"] = self.menus_df["popularity_score"].fillna(
                 DEFAULT_VALUES["POPULARITY_SCORE"]
@@ -89,7 +96,7 @@ class AIFoodRecommendationSystem:
         else:
             self.menus_df["popularity_score"] = DEFAULT_VALUES["POPULARITY_SCORE"]
 
-        # 부피
+        # 부피 계산
         if all(c in self.menus_df.columns for c in ["width", "length", "height"]):
             self.menus_df["volume"] = (
                 self.menus_df["width"].fillna(0)
@@ -99,25 +106,30 @@ class AIFoodRecommendationSystem:
         else:
             self.menus_df["volume"] = 0
 
-        # 메뉴명 문자열화
+        # 텍스트 컬럼 정리
         if "menu_name" in self.menus_df.columns:
             self.menus_df["menu_name"] = self.menus_df["menu_name"].astype(str)
         else:
             self.menus_df["menu_name"] = ""
 
+        # ID, 이미지 안전 캐스팅
+        if "menu_id" in self.menus_df.columns:
+            self.menus_df["menu_id"] = self.menus_df["menu_id"].astype(str)
+        if "restaurant_id" in self.menus_df.columns:
+            self.menus_df["restaurant_id"] = self.menus_df["restaurant_id"].astype(str)
+        if "image_url" in self.menus_df.columns:
+            self.menus_df["image_url"] = self.menus_df["image_url"].fillna("").astype(str)
+
         # 유연/고정 분류
-        self.menus_df["food_flexibility"] = self.menus_df["menu_name"].apply(
-            self._classify_food_flexibility
-        )
+        self.menus_df["food_flexibility"] = self.menus_df["menu_name"].apply(self._classify_food_flexibility)
 
     # ─────────────────────────────
-    # 내부: 유연성 분류
+    # 유연성 분류
     # ─────────────────────────────
     def _classify_food_flexibility(self, name: Any) -> str:
         if pd.isna(name):
             return "flexible"
         s = str(name).lower()
-
         for kw in RIGID_FOODS:
             if isinstance(kw, str) and kw and kw.lower() in s:
                 return "rigid"
@@ -127,7 +139,7 @@ class AIFoodRecommendationSystem:
         return "flexible"
 
     # ─────────────────────────────
-    # 내부: 카테고리별 텍스트/수치 특징 → KMeans 클러스터
+    # 카테고리별 텍스트/수치 특징 → KMeans 클러스터
     # ─────────────────────────────
     def _build_ai_features(self) -> None:
         if "category" not in self.menus_df.columns:
@@ -138,7 +150,7 @@ class AIFoodRecommendationSystem:
         for category in categories:
             cat_df = self.menus_df[self.menus_df["category"].astype(str) == category].copy()
 
-            # 표본이 1개면 클러스터 1개로 취급
+            # 표본 1개면 단일 클러스터
             if len(cat_df) < 2:
                 self.cluster_info[category] = {
                     "clusters": {
@@ -168,7 +180,7 @@ class AIFoodRecommendationSystem:
                 feats = text_vecs
 
             n = len(cat_df)
-            k = min(max(2, n // 5), 4)  # 2~4 사이 적절히
+            k = min(max(2, n // 5), 4)  # 2~4 사이
             km = KMeans(n_clusters=k, random_state=42, n_init=10)
             labels = km.fit_predict(feats)
 
@@ -188,7 +200,7 @@ class AIFoodRecommendationSystem:
             self.cluster_info[category] = {"clusters": clusters, "n_clusters": k}
 
     # ─────────────────────────────
-    # 내부: 컨테이너 적합도 (0~100)
+    # 컨테이너 적합도 (0~100)
     # ─────────────────────────────
     def calculate_container_utilization(
         self,
@@ -218,13 +230,13 @@ class AIFoodRecommendationSystem:
         return float((mv / uv) * 100.0)
 
     # ─────────────────────────────
-    # 내부: 클러스터 기반 점수 (0~100)
+    # 클러스터 기반 점수 (0~100)
     # ─────────────────────────────
     def calculate_ai_cluster_score(self, idx: int, category: str) -> float:
         info = self.cluster_info.get(str(category))
         if not info:
             return 50.0
-        for cid, data in info.get("clusters", {}).items():
+        for _, data in info.get("clusters", {}).items():
             if idx in data.get("indices", []):
                 avg = float(data.get("avg_popularity", DEFAULT_VALUES["POPULARITY_SCORE"]))
                 size = int(data.get("size", 1))
@@ -233,7 +245,7 @@ class AIFoodRecommendationSystem:
         return 50.0
 
     # ─────────────────────────────
-    # 공개: 카테고리 내 AI 추천
+    # 카테고리 내 AI 추천
     # ─────────────────────────────
     def get_ai_recommendations(
         self,
@@ -265,9 +277,10 @@ class AIFoodRecommendationSystem:
 
             score = util * 0.5 + cs * 0.3 + ps * 0.2
 
-            # 식당 이름 조회(빠른 맵 사용)
+            # 식당 이름 / place_id 조회
             rid = str(m.get("restaurant_id", ""))
             rname = self._rid2name.get(rid, "정보없음")
+            rplace = self._rid2place.get(rid, "")
 
             price_val = m.get("price", 0)
             try:
@@ -282,6 +295,8 @@ class AIFoodRecommendationSystem:
                 "price": price_int,
                 "container_utilization": round(util, 1),
                 "final_ai_score": round(float(score), 1),
+                "image_url": str(m.get("image_url", "") or ""),
+                "place_id": rplace,
             })
 
         recs.sort(key=lambda x: x["final_ai_score"], reverse=True)
@@ -312,7 +327,6 @@ def calc_fit(mw: float, ml: float, mh: float, cw: float, cl: float, ch: float) -
         cw, cl, ch = float(cw), float(cl), float(ch)
     except Exception:
         return 0.0
-
     if mw > cw or ml > cl or mh > ch:
         return 0.0
     uv = cw * cl * ch
@@ -330,7 +344,6 @@ def get_all_categories() -> List[str]:
 def get_recommendations(req: RecommendRequest) -> RecommendResponse:
     ai = _ensure_ai()
     menus = ai.menus_df
-    rests = ai.restaurants_df  # 참고용(merge 시 최소 컬럼만 사용)
 
     # 카테고리 검증
     valid = set(menus.get("category", pd.Series(dtype=str)).dropna().astype(str).unique())
@@ -338,7 +351,7 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
         if str(c) not in valid:
             raise KeyError(f"지원하지 않는 카테고리: {c}")
 
-    # AI 모드
+    # ── AI 모드 ───────────────────────────────────────────────
     if getattr(req, "use_ai", False):
         cand: List[Dict[str, Any]] = []
         for c in req.categories:
@@ -356,20 +369,21 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
 
         recs = [
             Recommendation(
-                food_id=str(i.get("menu_id")),
+                food_id=str(i.get("menu_id", "")),
                 food_name=str(i.get("menu_name", "")),
                 restaurant_name=str(i.get("restaurant_name", "정보없음")),
                 price=int(i.get("price", 0) or 0),
                 distance=0.0,
                 container_fit=round(float(i.get("container_utilization", 0.0)) / 100.0, 2),
-                image_url="",
+                image_url=str(i.get("image_url", "") or ""),  # ← 채움
+                place_id=str(i.get("place_id", "") or ""),    # ← 채움
                 description=f"AI 점수: {i.get('final_ai_score', 0)}",
             )
             for i in sel
         ]
         return RecommendResponse(page=1, limit=req.limit, total=len(recs), recommendations=recs)
 
-    # 기본(볼륨 기반) 경로
+    # ── 기본(볼륨 기반) 경로 ──────────────────────────────────
     df = menus[menus["category"].astype(str).isin([str(c) for c in req.categories])].copy()
     cw, cl, ch = req.container.width, req.container.length, req.container.height
 
@@ -379,9 +393,9 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
         axis=1
     )
 
-    # 레스토랑 조인: 필요한 컬럼만 깔끔하게
-    rests_min = ai.restaurants_df[["restaurant_id", "restaurant_name"]].copy() if \
-        {"restaurant_id", "restaurant_name"}.issubset(ai.restaurants_df.columns) else ai.restaurants_df
+    # 레스토랑 조인 (name, place_id)
+    cols = [c for c in ["restaurant_id", "restaurant_name", "place_id"] if c in ai.restaurants_df.columns]
+    rests_min = ai.restaurants_df[cols].copy() if cols else ai.restaurants_df
     merged = df.merge(rests_min, on="restaurant_id", how="left")
 
     # 정렬
@@ -391,7 +405,6 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
     elif sort_key == "price_asc" and "price" in merged.columns:
         merged = merged.sort_values("price", ascending=True)
     elif sort_key == "price_desc" and "price" in merged.columns:
-        merged = merged.sort_values("price", descending=True)  # ascending=False와 동일 의도
         merged = merged.sort_values("price", ascending=False)
     else:
         merged = merged.sort_values("container_fit", ascending=False)
@@ -425,6 +438,7 @@ def get_recommendations(req: RecommendRequest) -> RecommendResponse:
                 distance=distance_f,
                 container_fit=float(r.get("container_fit", 0.0) or 0.0),
                 image_url=str(r.get("image_url") or ""),
+                place_id=str(r.get("place_id") or ""),
                 description=str(r.get("notes") or ""),
             )
         )
