@@ -9,7 +9,7 @@ class Container(BaseModel):
 class RecommendRequest(BaseModel):
     container: Container = Field(..., description="사용자의 용기 사이즈 정보")
     categories: List[str]  = Field(..., example=["한식", "양식"], description="선택된 음식 카테고리 리스트")
-    sort: Optional[str]    = Field("default", example="price_asc", description="정렬 기준")
+    sort: Optional[str]    = Field("default", example="price_asc", description="정렬 기준 (default, distance, price_asc, price_desc)")
     page: Optional[int]    = Field(1, example=1, description="페이지 번호")
     limit: Optional[int]   = Field(10, example=5, description="한 페이지당 결과 수")
     use_ai: Optional[bool] = Field(False, description="AI 추천 사용 여부")
@@ -20,9 +20,9 @@ class Recommendation(BaseModel):
     restaurant_name: str = Field(..., example="맛있는집")
     price: int           = Field(..., example=8500)
     distance: float      = Field(..., example=1.2)
-    container_fit: float = Field(..., example=0.92, description="용기에 대한 적합도")
-    image_url: str       = Field("", example="https://example.com/image.jpg")  # 기본값 ""
-    place_id: str        = Field("", example="ChIJN1t_tDeuEmsRUsoyG83frY4")     # 추가
+    container_fit: float = Field(..., example=0.92, description="용기에 대한 적합도 (0~1)")
+    image_url: str       = Field("", example="https://example.com/image.jpg")   # 항상 string
+    place_id: str        = Field("", example="ChIJN1t_tDeuEmsRUsoyG83frY4")     # 항상 string
     description: str     = Field(..., example="매콤한 김치볶음밥 설명")
 
     @field_validator("image_url", "place_id", mode="before")
